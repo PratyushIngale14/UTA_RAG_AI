@@ -1,0 +1,10 @@
+google-genai
+langchain
+langchain-google-genai
+pinecone-client
+langchain-pinecone
+pypdf
+streamlit
+langchain-community
+langchain-core
+langchain-text-splitters
