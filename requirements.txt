@@ -7,3 +7,4 @@ streamlit
 langchain-community
 langchain-core
 langchain-text-splitters
+pinecone
