@@ -1,7 +1,6 @@
 google-genai
 langchain
 langchain-google-genai
-pinecone-client
 langchain-pinecone
 pypdf
 streamlit
