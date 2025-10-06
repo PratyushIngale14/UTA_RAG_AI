@@ -45,7 +45,7 @@ class StreamlitEmbeddings:
             )
             # === FINAL FIX: Access embedding vector using DOT NOTATION ===
             # The result object returns the embedding data directly as a property (dot notation).
-            return result.embedding
+            return result.embeddings[0].values
         except Exception as e:
             raise Exception(f"Error embedding content: {e}")
 
