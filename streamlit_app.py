@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-import time # Added for potential delays
+import time 
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
@@ -10,11 +10,19 @@ from pinecone import Pinecone
 
 # --- 0. Configuration from Streamlit Secrets ---
 INDEX_NAME = "uta-rag" 
+
+# Set environment variables (Keys are passed directly to classes below)
 os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
 
+# === ABSOLUTE FINAL FIX: DISABLE GCE METADATA SERVER LOOKUP ===
+# This prevents the SDK from wasting 60 seconds trying to fetch credentials
+# from a server that doesn't exist in the Streamlit environment.
+os.environ["NO_GCE_CHECK"] = "true" 
+# =============================================================
+
 # --- 1. Core RAG Chain Function (Optimized for Stability) ---
-# NOTE: The @st.cache_resource is critical for stability and performance after the first successful load.
+# NOTE: The @st.cache_resource is kept to speed up app loading after the first successful run.
 @st.cache_resource(ttl="1h", max_entries=1)
 def initialize_rag_chain():
     st.info("Initializing RAG system components...")
@@ -32,7 +40,7 @@ def initialize_rag_chain():
         index_name=INDEX_NAME, 
         embedding=embeddings
     )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4}) 
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) # k=3 for speed
 
     # 3. LLM (Using the fast, free-tier model)
     llm = ChatGoogleGenerativeAI(
@@ -70,8 +78,7 @@ def initialize_rag_chain():
 
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 
-# Image and Title 
-# FIX: Changed 'use_column_width' to 'use_container_width' to resolve deprecation warning.
+# Image and Title (Removed old deprecated parameter, using standard image)
 st.image("UTA Banner.png", use_container_width=True) 
 
 st.markdown(
@@ -88,13 +95,13 @@ if "rag_chain" not in st.session_state:
 # --- Main Logic Flow ---
 if st.session_state.rag_chain is None:
     # If the chain hasn't been initialized yet, try to initialize it
-    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. This may take up to 60 seconds..."):
+    # The spinner will run for up to 60 seconds, but should complete much faster with the fix.
+    with st.spinner("Initial Cold Start: Bypassing authentication checks..."):
         try:
-            # We call the cached resource function here
             st.session_state.rag_chain = initialize_rag_chain()
         except Exception as e:
-            st.error("RAG system initialization failed due to connection error. Please try refreshing the app in 1 minute.")
-            st.exception(e) # Show the full traceback for debugging
+            st.error("RAG system initialization failed. Please try refreshing in 1 minute.")
+            st.exception(e) 
 
 # --- Chat Interface ---
 if st.session_state.rag_chain is not None:
@@ -122,7 +129,6 @@ if st.session_state.rag_chain is not None:
         with st.chat_message("assistant"):
             with st.spinner("Searching knowledge base and generating answer..."):
                 try:
-                    # Invoke the RAG chain
                     answer = st.session_state.rag_chain.invoke(prompt)
                     
                     st.markdown(answer)
@@ -130,10 +136,9 @@ if st.session_state.rag_chain is not None:
                     st.session_state.messages.append({"role": "assistant", "content": answer})
 
                 except Exception as e:
-                    # This error is now captured and displayed cleanly
                     error_message = f"An error occurred during query. Error: {e}"
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
 else:
     # If the initial load failed, prompt user to refresh
-    st.warning("Please wait and refresh the page in a few minutes. The system is completing its initial setup.")
+    st.warning("System is initializing. Please refresh the page in 1 minute.")
