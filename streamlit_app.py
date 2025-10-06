@@ -1,12 +1,14 @@
 import streamlit as st
 import os
 import time 
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+# Import only necessary components, avoid conflicting GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from pinecone import Pinecone
+from google.generativeai import embed_content as gemini_embed_content # Import the native embedding function
 
 # --- 0. Configuration from Streamlit Secrets ---
 INDEX_NAME = "uta-rag" 
@@ -14,44 +16,45 @@ INDEX_NAME = "uta-rag"
 # Set environment variables (Keys are passed directly to classes below)
 os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
+os.environ["NO_GCE_CHECK"] = "true" # Final infrastructure fix
 
-# === ABSOLUTE FINAL FIX: DISABLE GCE METADATA SERVER LOOKUP ===
-# This prevents the SDK from wasting 60 seconds trying to fetch credentials
-# from a server that doesn't exist in the Streamlit environment.
-os.environ["NO_GCE_CHECK"] = "true" 
-# =============================================================
+# --- 1. Custom Embedding and Retriever Initialization ---
+class StreamlitEmbeddings:
+    """A minimal embedding class that calls the native gemini_embed_content function directly."""
+    def embed_query(self, text):
+        # This function relies on os.environ['GEMINI_API_KEY'] being correctly set.
+        try:
+            result = gemini_embed_content(
+                model="models/text-embedding-004", 
+                content=text, 
+                task_type="RETRIEVAL_QUERY",
+                api_key=os.environ["GEMINI_API_KEY"]
+            )
+            return result['embedding']
+        except Exception as e:
+            # Re-raise the exception with context for debugging
+            raise Exception(f"Error embedding content: {e}")
 
-# --- 1a. Embeddings and Retriever Initialization ---
-def initialize_embeddings_and_retriever():
+# --- 1. Core RAG Chain Function (FINAL OPTIMIZATION) ---
+def initialize_rag_chain(embeddings_client):
     
-    # 1. Pinecone Client & Embeddings 
+    # 1. Pinecone Client & Retriever (Keys are passed directly for stability)
     pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
     
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/text-embedding-004",
-        api_key=os.environ["GEMINI_API_KEY"] 
-    )
-    
     # 2. Vector Store Retriever: Connect to the EXISTING index 
+    # NOTE: We pass the CUSTOM embedding client here.
     vectorstore = PineconeVectorStore.from_existing_index(
         index_name=INDEX_NAME, 
-        embedding=embeddings
+        embedding=embeddings_client # Pass our custom embedding client
     )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    
-    return embeddings, retriever
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) 
 
-# --- 1b. RAG Chain Initialization (Uses components from 1a) ---
-def initialize_rag_chain(embeddings, retriever):
-    
     # 3. LLM (Using the fast, free-tier model)
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash-lite", 
         temperature=0.3,
         google_api_key=os.environ["GEMINI_API_KEY"],
-        # FINAL TIMEOUT FIX: Set a large timeout for the initial connection and subsequent requests
-        # This overrides the default 60s Streamlit/Google SDK timeout.
-        timeout=180 
+        timeout=180 # Extended timeout for stability
     )
     
     # 4. RAG Prompt Template
@@ -78,7 +81,6 @@ def initialize_rag_chain(embeddings, retriever):
     
     return rag_chain
 
-
 # --- UI Setup and Logic ---
 
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
@@ -94,44 +96,26 @@ st.markdown(
 )
 
 # --- App State Management ---
-if "embeddings" not in st.session_state:
-    st.session_state.embeddings = None
-if "retriever" not in st.session_state:
-    st.session_state.retriever = None
 if "rag_chain" not in st.session_state:
     st.session_state.rag_chain = None
-if "initialized" not in st.session_state:
-    st.session_state.initialized = False
 
-
-# --- Main Logic Flow: Progressive Initialization ---
-if not st.session_state.initialized:
-    # Attempt to initialize components if they haven't been yet
-    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **This is the final connection attempt. Please wait.**"):
+# --- Main Logic Flow: Lazy Initialization and Retry ---
+if st.session_state.rag_chain is None:
+    # If the chain hasn't been initialized yet, try to initialize it
+    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **Please try refreshing once if it persists.**"):
         try:
-            # Step 1: Initialize Embeddings and Retriever (The slow part)
-            if st.session_state.retriever is None:
-                embeddings, retriever = initialize_embeddings_and_retriever()
-                st.session_state.embeddings = embeddings
-                st.session_state.retriever = retriever
-            
-            # Step 2: Initialize the RAG Chain (The LLM part)
-            if st.session_state.rag_chain is None and st.session_state.retriever is not None:
-                st.session_state.rag_chain = initialize_rag_chain(
-                    st.session_state.embeddings, 
-                    st.session_state.retriever
-                )
-                st.session_state.initialized = True
-                st.success("RAG system successfully initialized! Ask your first question.")
-                st.rerun() # Rerun to update the UI cleanly
+            embeddings_client = StreamlitEmbeddings()
+            st.session_state.rag_chain = initialize_rag_chain(embeddings_client)
+            st.session_state.initialized = True
+            st.success("RAG system successfully initialized! Ask your first question.")
+            st.rerun() # Rerun to update the UI cleanly
                 
         except Exception as e:
             # This captures the 504 and prompts a retry.
             st.error("RAG system initialization failed due to connection timeout. **Please try refreshing the app now (Ctrl+R/F5)**.")
-            # st.exception(e) # Do not display exception repeatedly, just the error message
-
+            
 # --- Chat Interface ---
-if st.session_state.rag_chain is not None and st.session_state.initialized:
+if st.session_state.rag_chain is not None:
     # If initialization succeeded, proceed with chat logic
     if "messages" not in st.session_state:
         st.session_state.messages = []
