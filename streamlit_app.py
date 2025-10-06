@@ -48,7 +48,10 @@ def initialize_rag_chain(embeddings, retriever):
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash-lite", 
         temperature=0.3,
-        google_api_key=os.environ["GEMINI_API_KEY"] 
+        google_api_key=os.environ["GEMINI_API_KEY"],
+        # FINAL TIMEOUT FIX: Set a large timeout for the initial connection and subsequent requests
+        # This overrides the default 60s Streamlit/Google SDK timeout.
+        timeout=180 
     )
     
     # 4. RAG Prompt Template
@@ -104,7 +107,7 @@ if "initialized" not in st.session_state:
 # --- Main Logic Flow: Progressive Initialization ---
 if not st.session_state.initialized:
     # Attempt to initialize components if they haven't been yet
-    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **Please wait and try refreshing once if it fails.**"):
+    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **This is the final connection attempt. Please wait.**"):
         try:
             # Step 1: Initialize Embeddings and Retriever (The slow part)
             if st.session_state.retriever is None:
