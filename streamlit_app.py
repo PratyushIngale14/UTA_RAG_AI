@@ -34,10 +34,12 @@ class StreamlitEmbeddings:
             raise Exception("Gemini Client failed to initialize.")
             
         try:
-            # Call the embedding method via the correct nested path
+            # === FINAL FIX: Change 'content' to 'contents' (plural) ===
+            # This matches the signature of the client.models.embed_content method.
             result = GEMINI_CLIENT.models.embed_content( 
                 model="models/text-embedding-004", 
-                content=text, 
+                # Changed from content=text to contents=[text]
+                contents=[text], 
                 task_type="RETRIEVAL_QUERY",
             )
             return result['embedding']
@@ -115,10 +117,10 @@ if "initialized" not in st.session_state:
 # --- Main Logic Flow: Lazy Initialization and Retry ---
 if st.session_state.rag_chain is None and GEMINI_CLIENT is not None:
     # If the chain hasn't been initialized yet, try to initialize it
-    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **Please wait.**"):
+    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **This is the final attempt. Please wait.**"):
         try:
             embeddings_client = StreamlitEmbeddings()
-            # FIX: Pass the embeddings client with the underscore prefix
+            # Pass the embeddings client with the underscore prefix
             st.session_state.rag_chain = initialize_rag_chain(embeddings_client) 
             st.session_state.initialized = True
             st.success("RAG system successfully initialized! Ask your first question.")
