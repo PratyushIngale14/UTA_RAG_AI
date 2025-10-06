@@ -21,13 +21,10 @@ os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
 os.environ["NO_GCE_CHECK"] = "true" 
 # =============================================================
 
-# --- 1. Core RAG Chain Function (Optimized for Stability) ---
-# NOTE: The @st.cache_resource is kept to speed up app loading after the first successful run.
-@st.cache_resource(ttl="1h", max_entries=1)
-def initialize_rag_chain():
-    st.info("Initializing RAG system components...")
+# --- 1a. Embeddings and Retriever Initialization ---
+def initialize_embeddings_and_retriever():
     
-    # 1. Pinecone Client & Embeddings (Keys are passed directly for stability)
+    # 1. Pinecone Client & Embeddings 
     pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
     
     embeddings = GoogleGenerativeAIEmbeddings(
@@ -40,8 +37,13 @@ def initialize_rag_chain():
         index_name=INDEX_NAME, 
         embedding=embeddings
     )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) # k=3 for speed
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+    
+    return embeddings, retriever
 
+# --- 1b. RAG Chain Initialization (Uses components from 1a) ---
+def initialize_rag_chain(embeddings, retriever):
+    
     # 3. LLM (Using the fast, free-tier model)
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash-lite", 
@@ -71,14 +73,14 @@ def initialize_rag_chain():
         | StrOutputParser()
     )
     
-    st.success("RAG system successfully initialized!")
     return rag_chain
+
 
 # --- UI Setup and Logic ---
 
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 
-# Image and Title (Removed old deprecated parameter, using standard image)
+# Image and Title 
 st.image("UTA Banner.png", use_container_width=True) 
 
 st.markdown(
@@ -89,22 +91,44 @@ st.markdown(
 )
 
 # --- App State Management ---
+if "embeddings" not in st.session_state:
+    st.session_state.embeddings = None
+if "retriever" not in st.session_state:
+    st.session_state.retriever = None
 if "rag_chain" not in st.session_state:
     st.session_state.rag_chain = None
+if "initialized" not in st.session_state:
+    st.session_state.initialized = False
 
-# --- Main Logic Flow ---
-if st.session_state.rag_chain is None:
-    # If the chain hasn't been initialized yet, try to initialize it
-    # The spinner will run for up to 60 seconds, but should complete much faster with the fix.
-    with st.spinner("Initial Cold Start: Bypassing authentication checks..."):
+
+# --- Main Logic Flow: Progressive Initialization ---
+if not st.session_state.initialized:
+    # Attempt to initialize components if they haven't been yet
+    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **Please wait and try refreshing once if it fails.**"):
         try:
-            st.session_state.rag_chain = initialize_rag_chain()
+            # Step 1: Initialize Embeddings and Retriever (The slow part)
+            if st.session_state.retriever is None:
+                embeddings, retriever = initialize_embeddings_and_retriever()
+                st.session_state.embeddings = embeddings
+                st.session_state.retriever = retriever
+            
+            # Step 2: Initialize the RAG Chain (The LLM part)
+            if st.session_state.rag_chain is None and st.session_state.retriever is not None:
+                st.session_state.rag_chain = initialize_rag_chain(
+                    st.session_state.embeddings, 
+                    st.session_state.retriever
+                )
+                st.session_state.initialized = True
+                st.success("RAG system successfully initialized! Ask your first question.")
+                st.rerun() # Rerun to update the UI cleanly
+                
         except Exception as e:
-            st.error("RAG system initialization failed. Please try refreshing in 1 minute.")
-            st.exception(e) 
+            # This captures the 504 and prompts a retry.
+            st.error("RAG system initialization failed due to connection timeout. **Please try refreshing the app now (Ctrl+R/F5)**.")
+            # st.exception(e) # Do not display exception repeatedly, just the error message
 
 # --- Chat Interface ---
-if st.session_state.rag_chain is not None:
+if st.session_state.rag_chain is not None and st.session_state.initialized:
     # If initialization succeeded, proceed with chat logic
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -129,6 +153,7 @@ if st.session_state.rag_chain is not None:
         with st.chat_message("assistant"):
             with st.spinner("Searching knowledge base and generating answer..."):
                 try:
+                    # Invoke the RAG chain
                     answer = st.session_state.rag_chain.invoke(prompt)
                     
                     st.markdown(answer)
@@ -140,5 +165,5 @@ if st.session_state.rag_chain is not None:
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
 else:
-    # If the initial load failed, prompt user to refresh
-    st.warning("System is initializing. Please refresh the page in 1 minute.")
+    # This warning will appear if the initial load failed, prompting the manual retry.
+    st.warning("System is completing its initial setup. Please wait and refresh the page now to force retry.")
