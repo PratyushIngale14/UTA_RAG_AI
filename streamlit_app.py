@@ -1,176 +1,145 @@
 import streamlit as st
 import os
-import time 
-# Import only necessary components
+import time
+
+# LangChain + Google + Pinecone
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from pinecone import Pinecone
-from google import genai 
+from google import genai
 
-# --- 0. Configuration from Streamlit Secrets ---
-INDEX_NAME = "uta-rag" 
+# --- CONFIG ---
+INDEX_NAME = "uta-rag"
 
-# Set environment variables (Keys are passed directly to classes below)
-os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
-os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
+# Safely fetch secrets
+if "GEMINI_API_KEY" not in st.secrets or "PINECONE_API_KEY" not in st.secrets:
+    st.error("Missing required API keys in Streamlit Secrets! Please add GEMINI_API_KEY and PINECONE_API_KEY.")
+else:
+    os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
+    os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
 
-# === INFRASTRUCTURE FIXES: Disables GCE metadata check and ensures Python doesn't break ===
-os.environ["NO_GCE_CHECK"] = "true" 
-# ========================================================================================
+os.environ["NO_GCE_CHECK"] = "true"  # Prevents metadata lookup issues
 
 # --- Global Client Initialization ---
 GEMINI_CLIENT = None
 try:
-    # Uses the correct client name 'genai' from the import statement above
     GEMINI_CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 except Exception as e:
     st.error(f"Failed to initialize Gemini Client: {e}")
 
-
-# --- 1. Custom Embedding and Retriever Initialization ---
+# --- Embeddings Wrapper ---
 class StreamlitEmbeddings:
-    """A minimal wrapper to call the native Google GenAI embedding function via the client object."""
+    """Wrapper to call Google GenAI embeddings"""
     def embed_query(self, text):
         if GEMINI_CLIENT is None:
-            raise Exception("Gemini Client failed to initialize.")
-            
+            raise Exception("Gemini Client not initialized.")
         try:
-            # Call the embedding method via the correct nested path
-            result = GEMINI_CLIENT.models.embed_content( 
-                model="models/text-embedding-004", 
-                contents=[text], 
+            result = GEMINI_CLIENT.models.embed_content(
+                model="models/text-embedding-004",
+                contents=[text],
             )
-            # === FINAL FIX: Access embedding vector using DOT NOTATION ===
-            # The result object returns the embedding data directly as a property (dot notation).
-            return result.embeddings[0].values
+            # Defensive extraction for SDK consistency
+            if hasattr(result, "embeddings"):
+                return result.embeddings[0].values
+            elif "embedding" in result:  # fallback
+                return result["embedding"]
+            else:
+                raise Exception("Embedding format not recognized.")
         except Exception as e:
             raise Exception(f"Error embedding content: {e}")
 
-# --- 1. Core RAG Chain Function (FINAL OPTIMIZATION) ---
-@st.cache_resource(ttl="1h", max_entries=1)
+# --- RAG Chain ---
+@st.cache_resource(ttl=3600, max_entries=1)
 def initialize_rag_chain(_embeddings_client):
-    
-    # 1. Pinecone Client & Retriever (Keys are passed directly for stability)
-    pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-    
-    # 2. Vector Store Retriever: Connect to the EXISTING index 
-    vectorstore = PineconeVectorStore.from_existing_index(
-        index_name=INDEX_NAME, 
-        embedding=_embeddings_client # Use the parameter with the underscore here
-    )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) 
+    try:
+        pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+        # Ensure index exists
+        if INDEX_NAME not in [i["name"] for i in pc.list_indexes()]:
+            raise Exception(f"Index '{INDEX_NAME}' not found in Pinecone account.")
 
-    # 3. LLM (Using the fast, free-tier model)
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash-lite", 
-        temperature=0.3,
-        google_api_key=os.environ["GEMINI_API_KEY"],
-        timeout=180 # Extended timeout for stability
-    )
-    
-    # 4. RAG Prompt Template
-    SYSTEM_TEMPLATE = (
-        "You are a helpful and expert University Study Assistant specializing in Data Science Project Management. "
-        "Your goal is to facilitate learning using *only* the retrieved context provided below. "
-        "If you cannot find the answer in the context, you must state: "
-        "'The provided course material does not contain enough information on this specific topic.'\n\n"
-        "**Specific Task Guidance:**\n"
-        "1. **Answer** the user's question directly.\n"
-        "2. If the user asks for 'notes' or 'summary', generate 3-5 concise, well-structured bullet points.\n"
-        "3. If the user asks for 'quiz', 'questions', or 'test', generate a 3-question multiple-choice quiz "
-        "with answers based strictly on the context. Format the quiz clearly with options (A, B, C).\n\n"
-        "**Retrieved Context:**\n{context}"
-    )
-    
-    # Define the core RAG chain using LCEL
-    rag_chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
-        | ChatPromptTemplate.from_template(SYSTEM_TEMPLATE)
-        | llm
-        | StrOutputParser()
-    )
-    
-    st.success("RAG system successfully initialized!")
-    return rag_chain
+        vectorstore = PineconeVectorStore.from_existing_index(
+            index_name=INDEX_NAME,
+            embedding=_embeddings_client,
+        )
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-# --- UI Setup and Logic ---
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash-lite",
+            temperature=0.3,
+            google_api_key=os.environ["GEMINI_API_KEY"],
+            timeout=180,
+        )
 
+        SYSTEM_TEMPLATE = (
+            "You are a helpful University Study Assistant specializing in Data Science Project Management.\n"
+            "Use ONLY the retrieved context provided below. If missing, reply:\n"
+            "'The provided course material does not contain enough information on this specific topic.'\n\n"
+            "**Task Guidance:**\n"
+            "1. If asked for 'notes/summary', give 3–5 concise bullet points.\n"
+            "2. If asked for 'quiz/questions/test', make 3 multiple-choice Qs (A,B,C options) with answers.\n\n"
+            "**Retrieved Context:**\n{context}"
+        )
+
+        rag_chain = (
+            {"context": retriever, "question": RunnablePassthrough()}
+            | ChatPromptTemplate.from_template(SYSTEM_TEMPLATE)
+            | llm
+            | StrOutputParser()
+        )
+
+        return rag_chain
+
+    except Exception as e:
+        st.error(f"RAG initialization failed: {e}")
+        return None
+
+# --- UI ---
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
+st.image("UTA Banner.png", use_container_width=True)
+st.title("University of Texas at Arlington RAG Study Assistant")
+st.caption("Subject: Data Science Project Management")
 
-# Image and Title 
-st.image("UTA Banner.png", use_container_width=True) 
-
-st.markdown(
-    """
-    # University of Texas at Arlington RAG Study Assistant
-    ### Subject: Data Science Project Management
-    """
-)
-
-# --- App State Management ---
 if "rag_chain" not in st.session_state:
     st.session_state.rag_chain = None
-if "initialized" not in st.session_state:
-    st.session_state.initialized = False
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-
-# --- Main Logic Flow: Lazy Initialization and Retry ---
+# Initialize only once
 if st.session_state.rag_chain is None and GEMINI_CLIENT is not None:
-    # If the chain hasn't been initialized yet, try to initialize it
-    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **This is the final attempt. Please wait.**"):
-        try:
-            embeddings_client = StreamlitEmbeddings()
-            # Pass the embeddings client with the underscore prefix
-            st.session_state.rag_chain = initialize_rag_chain(embeddings_client) 
-            st.session_state.initialized = True
-            st.success("RAG system successfully initialized! Ask your first question.")
-            st.rerun() # Rerun to update the UI cleanly
-                
-        except Exception as e:
-            # This captures the 504 and prompts a retry.
-            st.error(f"RAG system initialization failed. Error: {e.args[0] if e.args else 'Unknown connection failure'}")
-            st.warning("**Please try refreshing the app now (Ctrl+R/F5)** to attempt re-initialization.")
-            
+    with st.spinner("Connecting to RAG system..."):
+        st.session_state.rag_chain = initialize_rag_chain(StreamlitEmbeddings())
+        if st.session_state.rag_chain:
+            st.success("RAG system ready! ")
+
 # --- Chat Interface ---
-if st.session_state.rag_chain is not None and st.session_state.initialized:
-    # If initialization succeeded, proceed with chat logic
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-        st.session_state.messages.append({"role": "assistant", "content": 
-            "Hello! I am your UTA Study Assistant. Ask me anything about your Data Science Project Management material, or try: "
-            "\n\n- 'Summarize the four phases of the project life cycle.'"
-            "\n- 'Create a 3-question quiz on scope creep.'"
+if st.session_state.rag_chain:
+    if not st.session_state.messages:
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": "Hello! I am your UTA Study Assistant. Try asking:\n"
+                       "- 'Summarize the four phases of the project life cycle.'\n"
+                       "- 'Create a 3-question quiz on scope creep.'"
         })
 
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    # User input
-    if prompt := st.chat_input("Enter your question, or ask for notes/quiz:"):
+    if prompt := st.chat_input("Ask me about your course..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Call the RAG chain
         with st.chat_message("assistant"):
-            with st.spinner("Searching knowledge base and generating answer..."):
+            with st.spinner("Thinking..."):
                 try:
-                    # Invoke the RAG chain
                     answer = st.session_state.rag_chain.invoke(prompt)
-                    
                     st.markdown(answer)
-
                     st.session_state.messages.append({"role": "assistant", "content": answer})
-
                 except Exception as e:
-                    error_message = f"An error occurred during query. Error: {e}"
-                    st.error(error_message)
-                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+                    st.error(f"Query failed: {e}")
 else:
-    # This warning will appear if the initial load failed, prompting the manual retry.
-    st.warning("System requires a successful connection to start. Please wait and refresh the page now to force retry.")
+    st.warning("RAG system not available. Check API keys and index configuration.")
