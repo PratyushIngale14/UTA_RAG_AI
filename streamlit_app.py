@@ -8,7 +8,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from pinecone import Pinecone
-from google.generativeai import embed_content as gemini_embed_content # Import the native embedding function
+from google import genai # FINAL FIX: Import the core client module
 
 # --- 0. Configuration from Streamlit Secrets ---
 INDEX_NAME = "uta-rag" 
@@ -18,17 +18,29 @@ os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
 os.environ["NO_GCE_CHECK"] = "true" # Final infrastructure fix
 
+# --- Global Client Initialization ---
+# Initialize the base Gemini client once. This object will be used for embedding.
+try:
+    GEMINI_CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+except Exception as e:
+    # Set a flag if client creation fails (e.g., if API key is missing)
+    st.error(f"Failed to initialize Gemini Client: {e}")
+    GEMINI_CLIENT = None 
+
+
 # --- 1. Custom Embedding and Retriever Initialization ---
 class StreamlitEmbeddings:
-    """A minimal embedding class that calls the native gemini_embed_content function directly."""
+    """A minimal embedding class that calls the native gemini_embed_content function via the client object."""
     def embed_query(self, text):
-        # This function relies on os.environ['GEMINI_API_KEY'] being correctly set.
+        if GEMINI_CLIENT is None:
+            raise Exception("Gemini Client failed to initialize.")
+            
         try:
-            result = gemini_embed_content(
+            # FIX: Call the embedding method via the initialized client object
+            result = GEMINI_CLIENT.embed_content(
                 model="models/text-embedding-004", 
                 content=text, 
                 task_type="RETRIEVAL_QUERY",
-                api_key=os.environ["GEMINI_API_KEY"]
             )
             return result['embedding']
         except Exception as e:
@@ -42,7 +54,6 @@ def initialize_rag_chain(embeddings_client):
     pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
     
     # 2. Vector Store Retriever: Connect to the EXISTING index 
-    # NOTE: We pass the CUSTOM embedding client here.
     vectorstore = PineconeVectorStore.from_existing_index(
         index_name=INDEX_NAME, 
         embedding=embeddings_client # Pass our custom embedding client
@@ -98,11 +109,14 @@ st.markdown(
 # --- App State Management ---
 if "rag_chain" not in st.session_state:
     st.session_state.rag_chain = None
+if "initialized" not in st.session_state:
+    st.session_state.initialized = False
+
 
 # --- Main Logic Flow: Lazy Initialization and Retry ---
-if st.session_state.rag_chain is None:
+if st.session_state.rag_chain is None and GEMINI_CLIENT is not None:
     # If the chain hasn't been initialized yet, try to initialize it
-    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **Please try refreshing once if it persists.**"):
+    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **This is the final attempt. Please wait.**"):
         try:
             embeddings_client = StreamlitEmbeddings()
             st.session_state.rag_chain = initialize_rag_chain(embeddings_client)
@@ -112,10 +126,11 @@ if st.session_state.rag_chain is None:
                 
         except Exception as e:
             # This captures the 504 and prompts a retry.
-            st.error("RAG system initialization failed due to connection timeout. **Please try refreshing the app now (Ctrl+R/F5)**.")
+            st.error(f"RAG system initialization failed. Error: {e.args[0] if e.args else 'Unknown connection failure'}")
+            st.warning("**Please try refreshing the app now (Ctrl+R/F5)** to attempt re-initialization.")
             
 # --- Chat Interface ---
-if st.session_state.rag_chain is not None:
+if st.session_state.rag_chain is not None and st.session_state.initialized:
     # If initialization succeeded, proceed with chat logic
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -153,4 +168,4 @@ if st.session_state.rag_chain is not None:
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
 else:
     # This warning will appear if the initial load failed, prompting the manual retry.
-    st.warning("System is completing its initial setup. Please wait and refresh the page now to force retry.")
+    st.warning("System requires a successful connection to start. Please wait and refresh the page now to force retry.")
