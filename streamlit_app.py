@@ -35,14 +35,13 @@ class StreamlitEmbeddings:
             raise Exception("Gemini Client failed to initialize.")
             
         try:
-            # === FINAL FIX: Removed the conflicting 'task_type' argument ===
-            # The client.models.embed_content method now only receives required arguments.
+            # Call the embedding method via the correct nested path
             result = GEMINI_CLIENT.models.embed_content( 
                 model="models/text-embedding-004", 
                 contents=[text], 
             )
-            # The result object contains the embedding at ['embedding']
-            return result['embedding'] 
+            # === FINAL FIX: Access embedding vector using DOT NOTATION ===
+            return result.embedding
         except Exception as e:
             raise Exception(f"Error embedding content: {e}")
 
