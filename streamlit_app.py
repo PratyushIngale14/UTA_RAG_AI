@@ -9,16 +9,14 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
 # --- 0. Configuration from Streamlit Secrets ---
-# Streamlit Cloud uses st.secrets to access environment variables securely.
 INDEX_NAME = "uta-rag" 
 
-# Set environment variables for the libraries (keys are passed directly to classes below)
-# These values must be set in your Streamlit Cloud Secrets panel.
+# Set environment variables (keys are passed directly to classes below)
 os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
+PINECONE_REGION = st.secrets["PINECONE_REGION"] 
 
 # --- 1. RAG Core Components Initialization ---
-# This is wrapped in st.cache_resource to load heavy components only once
 @st.cache_resource(show_spinner="Connecting to the RAG Knowledge Base...")
 def initialize_rag():
     
@@ -31,7 +29,7 @@ def initialize_rag():
         api_key=os.environ["GEMINI_API_KEY"] 
     )
     
-    # 2. Vector Store Retriever: Connect to the EXISTING index (uta-rag)
+    # 2. Vector Store Retriever: Querying side
     vectorstore = PineconeVectorStore.from_existing_index(
         index_name=INDEX_NAME, 
         embedding=embeddings
@@ -47,7 +45,7 @@ def initialize_rag():
     
     # 4. RAG Prompt Template (Includes instructions for Q&A, Notes, and Quiz)
     SYSTEM_TEMPLATE = (
-        "You are a helpful and expert University Study Assistant specializing in Project Management. "
+        "You are a helpful and expert University Study Assistant specializing in Data Science Project Management. "
         "Your goal is to facilitate learning using *only* the retrieved context provided below. "
         "Maintain a professional and encouraging tone. "
         "If you cannot find the answer in the context, you must state: "
@@ -73,15 +71,27 @@ def initialize_rag():
 rag_chain = initialize_rag()
 
 # --- 2. Streamlit UI and Chat Logic ---
-st.set_page_config(page_title="🎓 University RAG Chatbot (Free Access)", layout="wide")
-st.title("📚 University RAG Study Assistant")
-st.subheader("Powered by Gemini AI and Pinecone Cloud DB (Free Tier)")
+# Set the page configuration
+st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 
-# Initialize chat history
+# --- Custom Header/Branding ---
+# NOTE: This assumes you have pushed the image 'UTA Banner.png' to your GitHub repo root.
+UTA_BANNER_URL = "https://raw.githubusercontent.com/PratyushIngale14/UTA_RAG_AI/main/UTA%20Banner.png"
+st.image(UTA_BANNER_URL, use_column_width=True)
+
+# New Main Title and Subject Subtitle
+st.markdown(
+    """
+    # University of Texas at Arlington RAG Study Assistant
+    ### Subject: Data Science Project Management
+    """
+)
+
+# Initialize chat history (Updated welcome message and removed emoji)
 if "messages" not in st.session_state:
     st.session_state.messages = []
     st.session_state.messages.append({"role": "assistant", "content": 
-        "Hello! I am ready to help you study. Ask me about your Project Management material, or try: "
+        "Hello! I am your UTA Study Assistant. Ask me anything about your Data Science Project Management material, or try: "
         "\n\n- 'Summarize the four phases of the project life cycle.'"
         "\n- 'Create a 3-question quiz on scope creep.'"
     })
