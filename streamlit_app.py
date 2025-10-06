@@ -1,7 +1,7 @@
 import streamlit as st
 import os
-import base64 # <-- NEW IMPORT
-import io # <-- NEW IMPORT
+import base64 
+import io 
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
@@ -70,27 +70,20 @@ def initialize_rag():
     
     return rag_chain
 
-# Function to get image data via a hardcoded Base64 string
+# --- BASE64 FIX: Embeds the image data directly. Requires the image file to be present.
 def get_base64_image(image_path):
     """Encodes the local image file to a base64 string for direct embedding."""
     try:
-        # Load the image from the local path (needs to be in the Codespaces environment)
-        # Note: You MUST upload the image to the same folder as this script.
         with open(image_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("utf-8")
-        return f"data:image/png;base64,{data}"
+        # Use HTML to force the image width to 100% of the container
+        return f'<img src="data:image/png;base64,{data}" style="width:100%;">'
     except FileNotFoundError:
-        st.error(f"Image file not found at: {image_path}. Please upload 'UTA Banner.png' to the repository root.")
-        return None
+        st.error(f"Image file not found at: {image_path}. Please check the file name and path.")
+        return ""
 
 # NOTE: The image file must be in the same directory as this script in your repository
 IMAGE_PATH = "UTA Banner.png" 
-# Hardcoded image URL for deployment purposes (using the raw GitHub URL)
-# The image loading function below attempts to load it by URL, or you can use the base64 method above.
-# For Streamlit Cloud deployment stability, loading a raw GitHub file is still the preferred cloud method.
-
-# --- Image URL used for deployment ---
-UTA_BANNER_URL = "https://raw.githubusercontent.com/PratyushIngale14/UTA_RAG_AI/main/UTA%20Banner.png"
 
 rag_chain = initialize_rag()
 
@@ -98,10 +91,13 @@ rag_chain = initialize_rag()
 # Set the page configuration
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 
-# --- Custom Header/Branding ---
-# FIX: Using the highly stable raw GitHub path and the correct width parameter.
-# The `st.image` function is the best way to handle this in Streamlit.
-st.image(UTA_BANNER_URL, use_container_width=True) 
+# --- Custom Header/Branding (Display image via Markdown/Base64) ---
+# Call the function to get the Base64 HTML string
+banner_html = get_base64_image(IMAGE_PATH)
+
+if banner_html:
+    # Use st.markdown with unsafe_allow_html=True to render the embedded image
+    st.markdown(banner_html, unsafe_allow_html=True) 
 
 # New Main Title and Subject Subtitle
 st.markdown(
