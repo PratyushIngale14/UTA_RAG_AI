@@ -1,10 +1,10 @@
 google-genai
 langchain
 langchain-google-genai
-langchain-pinecone  # This package requires the new 'pinecone' package
+langchain-pinecone  
 pypdf
 streamlit
 langchain-community
 langchain-core
 langchain-text-splitters
-pinecone          # The correct and mandatory name for the Pinecone client
+pinecone         
