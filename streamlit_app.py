@@ -24,6 +24,7 @@ os.environ["NO_GCE_CHECK"] = "true"
 # --- Global Client Initialization ---
 GEMINI_CLIENT = None
 try:
+    # Uses the correct client name 'genai' from the import statement above
     GEMINI_CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 except Exception as e:
     st.error(f"Failed to initialize Gemini Client: {e}")
@@ -42,11 +43,10 @@ class StreamlitEmbeddings:
                 model="models/text-embedding-004", 
                 contents=[text], 
             )
-            # === FINAL FIX: Changed bracket notation to DOT NOTATION ===
-            # Accessing the 'embedding' property of the EmbedContentResponse object.
-            return result.embedding 
+            # === FINAL FIX: Access embedding vector using DOT NOTATION ===
+            # The result object returns the embedding data directly as a property (dot notation).
+            return result.embedding
         except Exception as e:
-            # Re-raise the exception with context for debugging
             raise Exception(f"Error embedding content: {e}")
 
 # --- 1. Core RAG Chain Function (FINAL OPTIMIZATION) ---
@@ -120,9 +120,10 @@ if "initialized" not in st.session_state:
 # --- Main Logic Flow: Lazy Initialization and Retry ---
 if st.session_state.rag_chain is None and GEMINI_CLIENT is not None:
     # If the chain hasn't been initialized yet, try to initialize it
-    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **Please wait.**"):
+    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **This is the final attempt. Please wait.**"):
         try:
             embeddings_client = StreamlitEmbeddings()
+            # Pass the embeddings client with the underscore prefix
             st.session_state.rag_chain = initialize_rag_chain(embeddings_client) 
             st.session_state.initialized = True
             st.success("RAG system successfully initialized! Ask your first question.")
