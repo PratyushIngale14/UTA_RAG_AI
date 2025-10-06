@@ -64,7 +64,7 @@ def initialize_rag_chain(_embeddings_client):
             index_name=INDEX_NAME,
             embedding=_embeddings_client,
         )
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
 
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash-lite",
