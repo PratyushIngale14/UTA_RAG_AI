@@ -75,9 +75,10 @@ rag_chain = initialize_rag()
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 
 # --- Custom Header/Branding ---
-# NOTE: This assumes you have pushed the image 'UTA Banner.png' to your GitHub repo root.
+# NOTE: Using the direct raw GitHub URL and the correct width parameter.
 UTA_BANNER_URL = "https://raw.githubusercontent.com/PratyushIngale14/UTA_RAG_AI/main/UTA%20Banner.png"
-st.image(UTA_BANNER_URL, use_column_width=True)
+# FIX: Replaced deprecated use_column_width with use_container_width
+st.image(UTA_BANNER_URL, use_container_width=True) 
 
 # New Main Title and Subject Subtitle
 st.markdown(
