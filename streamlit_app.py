@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import time # Added for potential delays
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
@@ -9,16 +10,14 @@ from pinecone import Pinecone
 
 # --- 0. Configuration from Streamlit Secrets ---
 INDEX_NAME = "uta-rag" 
-
-# Set environment variables (Crucial for direct class instantiation)
 os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
 
-# --- 1. RAG Core Components Initialization (Optimized for Cold Start) ---
-# NOTE: Removed @st.cache_resource to force direct initialization
-
-# Initialize RAG components inside a function for clean structure
-def get_rag_chain():
+# --- 1. Core RAG Chain Function (Optimized for Stability) ---
+# NOTE: The @st.cache_resource is critical for stability and performance after the first successful load.
+@st.cache_resource(ttl="1h", max_entries=1)
+def initialize_rag_chain():
+    st.info("Initializing RAG system components...")
     
     # 1. Pinecone Client & Embeddings (Keys are passed directly for stability)
     pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
@@ -29,7 +28,6 @@ def get_rag_chain():
     )
     
     # 2. Vector Store Retriever: Connect to the EXISTING index 
-    # Use the Index object directly for querying performance
     vectorstore = PineconeVectorStore.from_existing_index(
         index_name=INDEX_NAME, 
         embedding=embeddings
@@ -52,7 +50,7 @@ def get_rag_chain():
         "**Specific Task Guidance:**\n"
         "1. **Answer** the user's question directly.\n"
         "2. If the user asks for 'notes' or 'summary', generate 3-5 concise, well-structured bullet points.\n"
-        "3. If the user asks for a 'quiz', 'questions', or 'test', generate a 3-question multiple-choice quiz "
+        "3. If the user asks for 'quiz', 'questions', or 'test', generate a 3-question multiple-choice quiz "
         "with answers based strictly on the context. Format the quiz clearly with options (A, B, C).\n\n"
         "**Retrieved Context:**\n{context}"
     )
@@ -65,28 +63,16 @@ def get_rag_chain():
         | StrOutputParser()
     )
     
+    st.success("RAG system successfully initialized!")
     return rag_chain
 
-# --- Global Initialization (Wrap in a test block to avoid repeated calls on refresh) ---
-
-# We only initialize the chain once globally outside of the main block to avoid repeated work
-# and handle the initial timeout by catching the exception.
-try:
-    RAG_CHAIN_INIT = get_rag_chain()
-    APP_READY = True
-except Exception as e:
-    st.error("RAG system initialization failed. Please try again in a few minutes.")
-    st.exception(e) # Show the full traceback for debugging
-    RAG_CHAIN_INIT = None
-    APP_READY = False
-
-# --- UI Setup (Minimalist, assuming image is fixed externally) ---
+# --- UI Setup and Logic ---
 
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 
-# Image Placeholder (Assuming the external fix worked or is not the priority)
-# NOTE: You MUST ensure the 'UTA Banner.png' file exists in the repo and the URL path is stable.
-st.image("UTA Banner.png", use_column_width=True) 
+# Image and Title 
+# FIX: Changed 'use_column_width' to 'use_container_width' to resolve deprecation warning.
+st.image("UTA Banner.png", use_container_width=True) 
 
 st.markdown(
     """
@@ -95,10 +81,24 @@ st.markdown(
     """
 )
 
-# --- Chat Logic ---
+# --- App State Management ---
+if "rag_chain" not in st.session_state:
+    st.session_state.rag_chain = None
 
-if APP_READY:
-    # Initialize chat history 
+# --- Main Logic Flow ---
+if st.session_state.rag_chain is None:
+    # If the chain hasn't been initialized yet, try to initialize it
+    with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. This may take up to 60 seconds..."):
+        try:
+            # We call the cached resource function here
+            st.session_state.rag_chain = initialize_rag_chain()
+        except Exception as e:
+            st.error("RAG system initialization failed due to connection error. Please try refreshing the app in 1 minute.")
+            st.exception(e) # Show the full traceback for debugging
+
+# --- Chat Interface ---
+if st.session_state.rag_chain is not None:
+    # If initialization succeeded, proceed with chat logic
     if "messages" not in st.session_state:
         st.session_state.messages = []
         st.session_state.messages.append({"role": "assistant", "content": 
@@ -123,7 +123,7 @@ if APP_READY:
             with st.spinner("Searching knowledge base and generating answer..."):
                 try:
                     # Invoke the RAG chain
-                    answer = RAG_CHAIN_INIT.invoke(prompt)
+                    answer = st.session_state.rag_chain.invoke(prompt)
                     
                     st.markdown(answer)
 
@@ -135,4 +135,5 @@ if APP_READY:
                     st.error(error_message)
                     st.session_state.messages.append({"role": "assistant", "content": error_message})
 else:
-    st.warning("Application failed to initialize the RAG system. Please check the logs and ensure API keys are correct and services are available.")
+    # If the initial load failed, prompt user to refresh
+    st.warning("Please wait and refresh the page in a few minutes. The system is completing its initial setup.")
