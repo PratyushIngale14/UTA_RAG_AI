@@ -21,6 +21,7 @@ os.environ["NO_GCE_CHECK"] = "true" # Final infrastructure fix
 # --- Global Client Initialization ---
 # Initialize the base Gemini client once. This object will be used for embedding.
 try:
+    # Uses the correct client name 'genai' from the import statement above
     GEMINI_CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 except Exception as e:
     # Set a flag if client creation fails (e.g., if API key is missing)
@@ -36,8 +37,8 @@ class StreamlitEmbeddings:
             raise Exception("Gemini Client failed to initialize.")
             
         try:
-            # FIX: Call the embedding method via the initialized client object
-            result = GEMINI_CLIENT.embed_content(
+            # FINAL FIX: Call the embedding method via the correct SDK path: client.models.embed_content
+            result = GEMINI_CLIENT.models.embed_content( 
                 model="models/text-embedding-004", 
                 content=text, 
                 task_type="RETRIEVAL_QUERY",
