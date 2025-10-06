@@ -1,14 +1,14 @@
 import streamlit as st
 import os
 import time 
-# Import only necessary components, avoid conflicting GoogleGenerativeAIEmbeddings
+# Import only necessary components
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from pinecone import Pinecone
-from google import genai # Import the core client module
+from google import genai 
 
 # --- 0. Configuration from Streamlit Secrets ---
 INDEX_NAME = "uta-rag" 
@@ -16,13 +16,11 @@ INDEX_NAME = "uta-rag"
 # Set environment variables (Keys are passed directly to classes below)
 os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
-os.environ["NO_GCE_CHECK"] = "true" # Infrastructure fix to prevent 60s timeout
+os.environ["NO_GCE_CHECK"] = "true" # Infrastructure fix
 
 # --- Global Client Initialization ---
-# Initialize the base Gemini client once. This object will be used for embedding.
 GEMINI_CLIENT = None
 try:
-    # Uses the correct client name 'genai' from the import statement above
     GEMINI_CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 except Exception as e:
     st.error(f"Failed to initialize Gemini Client: {e}")
@@ -30,14 +28,13 @@ except Exception as e:
 
 # --- 1. Custom Embedding and Retriever Initialization ---
 class StreamlitEmbeddings:
-    """A high-level wrapper to call the native Google GenAI embedding function."""
+    """A minimal wrapper to call the native Google GenAI embedding function via the client object."""
     def embed_query(self, text):
         if GEMINI_CLIENT is None:
             raise Exception("Gemini Client failed to initialize.")
             
         try:
-            # === FINAL FIX: Call the embedding method via the correct nested path ===
-            # This is the stable method for the current Google SDK versioning:
+            # Call the embedding method via the correct nested path
             result = GEMINI_CLIENT.models.embed_content( 
                 model="models/text-embedding-004", 
                 content=text, 
@@ -45,12 +42,11 @@ class StreamlitEmbeddings:
             )
             return result['embedding']
         except Exception as e:
-            # Re-raise the exception with context for debugging
             raise Exception(f"Error embedding content: {e}")
 
 # --- 1. Core RAG Chain Function (FINAL OPTIMIZATION) ---
 @st.cache_resource(ttl="1h", max_entries=1)
-def initialize_rag_chain(embeddings_client):
+def initialize_rag_chain(_embeddings_client):
     
     # 1. Pinecone Client & Retriever (Keys are passed directly for stability)
     pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
@@ -58,7 +54,7 @@ def initialize_rag_chain(embeddings_client):
     # 2. Vector Store Retriever: Connect to the EXISTING index 
     vectorstore = PineconeVectorStore.from_existing_index(
         index_name=INDEX_NAME, 
-        embedding=embeddings_client # Pass our custom embedding client
+        embedding=_embeddings_client # Use the parameter with the underscore here
     )
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) 
 
@@ -122,7 +118,8 @@ if st.session_state.rag_chain is None and GEMINI_CLIENT is not None:
     with st.spinner("Initial Cold Start: Waking up RAG and Gemini services. **Please wait.**"):
         try:
             embeddings_client = StreamlitEmbeddings()
-            st.session_state.rag_chain = initialize_rag_chain(embeddings_client)
+            # FIX: Pass the embeddings client with the underscore prefix
+            st.session_state.rag_chain = initialize_rag_chain(embeddings_client) 
             st.session_state.initialized = True
             st.success("RAG system successfully initialized! Ask your first question.")
             st.rerun() # Rerun to update the UI cleanly
