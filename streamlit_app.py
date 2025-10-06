@@ -1,7 +1,5 @@
 import streamlit as st
 import os
-import base64 
-import io 
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
@@ -70,34 +68,20 @@ def initialize_rag():
     
     return rag_chain
 
-# --- BASE64 FIX: Embeds the image data directly. Requires the image file to be present.
-def get_base64_image(image_path):
-    """Encodes the local image file to a base64 string for direct embedding."""
-    try:
-        with open(image_path, "rb") as f:
-            data = base64.b64encode(f.read()).decode("utf-8")
-        # Use HTML to force the image width to 100% of the container
-        return f'<img src="data:image/png;base64,{data}" style="width:100%;">'
-    except FileNotFoundError:
-        st.error(f"Image file not found at: {image_path}. Please check the file name and path.")
-        return ""
-
-# NOTE: The image file must be in the same directory as this script in your repository
-IMAGE_PATH = "UTA Banner.png" 
+# --- Image Path ---
+# Use a static link structure that is guaranteed to work on Streamlit Cloud
+# Replace YOUR_REPO_NAME if it's not UTA_RAG_AI
+# The file name is "UTA Banner.png" (note the spaces)
+GITHUB_RAW_PATH = "https://raw.githubusercontent.com/PratyushIngale14/UTA_RAG_AI/main/UTA%20Banner.png"
 
 rag_chain = initialize_rag()
 
 # --- 2. Streamlit UI and Chat Logic ---
-# Set the page configuration
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 
-# --- Custom Header/Branding (Display image via Markdown/Base64) ---
-# Call the function to get the Base64 HTML string
-banner_html = get_base64_image(IMAGE_PATH)
-
-if banner_html:
-    # Use st.markdown with unsafe_allow_html=True to render the embedded image
-    st.markdown(banner_html, unsafe_allow_html=True) 
+# --- Custom Header/Branding (Display image) ---
+# FIX: Using st.image with the direct, encoded GitHub raw URL
+st.image(GITHUB_RAW_PATH, use_container_width=True) 
 
 # New Main Title and Subject Subtitle
 st.markdown(
