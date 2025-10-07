@@ -2,87 +2,73 @@ import streamlit as st
 import os
 import time
 
-# LangChain + Google + Pinecone
+# --- LangChain + Google + Pinecone ---
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from pinecone import Pinecone
-from google import genai
-from google.generativeai import embed_content  # <-- Added import for native embedding
+import google.generativeai as genai  
 
 # --- CONFIG ---
 INDEX_NAME = "uta-rag"
 
-# Safely fetch secrets
+# --- Secret Key Validation ---
 if "GEMINI_API_KEY" not in st.secrets or "PINECONE_API_KEY" not in st.secrets:
     st.error("Missing required API keys in Streamlit Secrets! Please add GEMINI_API_KEY and PINECONE_API_KEY.")
 else:
     os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
     os.environ["PINECONE_API_KEY"] = st.secrets["PINECONE_API_KEY"]
 
-os.environ["NO_GCE_CHECK"] = "true"  # Prevents metadata lookup issues
+os.environ["NO_GCE_CHECK"] = "true"  # Prevents GCP metadata lookup issues
 
-# --- Global Client Initialization ---
+# --- Initialize Gemini Client ---
 GEMINI_CLIENT = None
 try:
-    GEMINI_CLIENT = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    GEMINI_CLIENT = genai
 except Exception as e:
     st.error(f"Failed to initialize Gemini Client: {e}")
 
-# --- Embeddings Wrapper (Fixed for retrieval-safe embedding) ---
+# --- Embeddings Wrapper ---
 class StreamlitEmbeddings:
-    """Wrapper to call Google GenAI embeddings with retrieval alignment"""
+    """Wrapper to call Google GenAI embeddings"""
     def embed_query(self, text):
+        if GEMINI_CLIENT is None:
+            raise Exception("Gemini Client not initialized.")
         try:
-            result = embed_content(
+            result = GEMINI_CLIENT.embed_content(
                 model="models/text-embedding-004",
                 content=text,
-                task_type="RETRIEVAL_QUERY"  # crucial fix
             )
+            # Defensive extraction
             if "embedding" in result:
                 return result["embedding"]
-            elif hasattr(result, "embeddings"):
-                return result.embeddings[0].values
             else:
-                raise Exception("Embedding format not recognized.")
+                raise Exception("Unexpected embedding format returned from Gemini.")
         except Exception as e:
-            raise Exception(f"Error embedding query: {e}")
+            raise Exception(f"Error embedding content: {e}")
 
-    def embed_documents(self, texts):
-        """Optional helper if retriever ever needs document embeddings"""
-        embeddings = []
-        for text in texts:
-            try:
-                result = embed_content(
-                    model="models/text-embedding-004",
-                    content=text,
-                    task_type="RETRIEVAL_DOCUMENT"
-                )
-                embeddings.append(result["embedding"])
-            except Exception as e:
-                st.warning(f"Embedding document failed: {e}")
-                embeddings.append([0.0] * 768)
-        return embeddings
-
-# --- RAG Chain ---
+# --- RAG Chain Initialization ---
 @st.cache_resource(ttl=3600, max_entries=1)
 def initialize_rag_chain(_embeddings_client):
     try:
         pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-        # Ensure index exists
-        if INDEX_NAME not in [i["name"] for i in pc.list_indexes()]:
-            raise Exception(f"Index '{INDEX_NAME}' not found in Pinecone account.")
+        indexes = [i["name"] for i in pc.list_indexes()]
+
+        if INDEX_NAME not in indexes:
+            raise Exception(f"Index '{INDEX_NAME}' not found in your Pinecone account.")
 
         vectorstore = PineconeVectorStore.from_existing_index(
             index_name=INDEX_NAME,
             embedding=_embeddings_client,
         )
+
         retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
 
         llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash-lite",
+            model="gemini-2.0-flash-exp",
             temperature=0.3,
             google_api_key=os.environ["GEMINI_API_KEY"],
             timeout=180,
@@ -111,7 +97,7 @@ def initialize_rag_chain(_embeddings_client):
         st.error(f"RAG initialization failed: {e}")
         return None
 
-# --- UI ---
+# --- Streamlit UI ---
 st.set_page_config(page_title="UTA RAG Study Assistant", layout="wide")
 st.image("UTA Banner.png", use_container_width=True)
 st.title("University of Texas at Arlington RAG Study Assistant")
@@ -127,7 +113,7 @@ if st.session_state.rag_chain is None and GEMINI_CLIENT is not None:
     with st.spinner("Connecting to RAG system..."):
         st.session_state.rag_chain = initialize_rag_chain(StreamlitEmbeddings())
         if st.session_state.rag_chain:
-            st.success("RAG system ready!")
+            st.success("RAG system ready! ")
 
 # --- Chat Interface ---
 if st.session_state.rag_chain:
