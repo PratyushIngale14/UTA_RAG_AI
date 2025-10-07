@@ -10,6 +10,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from pinecone import Pinecone
 from google import genai
+from google.generativeai import embed_content  # <-- Added import for native embedding
 
 # --- CONFIG ---
 INDEX_NAME = "uta-rag"
@@ -30,26 +31,40 @@ try:
 except Exception as e:
     st.error(f"Failed to initialize Gemini Client: {e}")
 
-# --- Embeddings Wrapper ---
+# --- Embeddings Wrapper (Fixed for retrieval-safe embedding) ---
 class StreamlitEmbeddings:
-    """Wrapper to call Google GenAI embeddings"""
+    """Wrapper to call Google GenAI embeddings with retrieval alignment"""
     def embed_query(self, text):
-        if GEMINI_CLIENT is None:
-            raise Exception("Gemini Client not initialized.")
         try:
-            result = GEMINI_CLIENT.models.embed_content(
+            result = embed_content(
                 model="models/text-embedding-004",
-                contents=[text],
+                content=text,
+                task_type="RETRIEVAL_QUERY"  # crucial fix
             )
-            # Defensive extraction for SDK consistency
-            if hasattr(result, "embeddings"):
-                return result.embeddings[0].values
-            elif "embedding" in result:  # fallback
+            if "embedding" in result:
                 return result["embedding"]
+            elif hasattr(result, "embeddings"):
+                return result.embeddings[0].values
             else:
                 raise Exception("Embedding format not recognized.")
         except Exception as e:
-            raise Exception(f"Error embedding content: {e}")
+            raise Exception(f"Error embedding query: {e}")
+
+    def embed_documents(self, texts):
+        """Optional helper if retriever ever needs document embeddings"""
+        embeddings = []
+        for text in texts:
+            try:
+                result = embed_content(
+                    model="models/text-embedding-004",
+                    content=text,
+                    task_type="RETRIEVAL_DOCUMENT"
+                )
+                embeddings.append(result["embedding"])
+            except Exception as e:
+                st.warning(f"Embedding document failed: {e}")
+                embeddings.append([0.0] * 768)
+        return embeddings
 
 # --- RAG Chain ---
 @st.cache_resource(ttl=3600, max_entries=1)
@@ -112,7 +127,7 @@ if st.session_state.rag_chain is None and GEMINI_CLIENT is not None:
     with st.spinner("Connecting to RAG system..."):
         st.session_state.rag_chain = initialize_rag_chain(StreamlitEmbeddings())
         if st.session_state.rag_chain:
-            st.success("RAG system ready! ")
+            st.success("RAG system ready!")
 
 # --- Chat Interface ---
 if st.session_state.rag_chain:
